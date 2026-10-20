@@ -1,7 +1,7 @@
 // Trabalho: AES-128 em dois ESP32, com comunicação pela UART.
 // Arquivo: main.cpp.
 // Autores: Lucas Taveira de Lima e Marcus Viníicius Santos de Almeida.
-// Finalidade: configurar cada placa como transmissor ou receptor e executar o sistema.
+// Finalidade: transmitir dados criptografados, recuperar as mensagens e controlar o LED da placa B.
 
 #include <Arduino.h>                                                                                         // Declara as funções básicas do Arduino.
 #include <string.h>                                                                                          // Declara as funções de cópia e comparação de memória.
@@ -12,9 +12,13 @@ const char MATRICULA_A[] = "2021278440073";                                     
 const char MATRICULA_B[] = "2021278440278";                                                                  // Matrícula de Marcus Viníicius Santos de Almeida.
 const bool TRANSMISSOR = true;                                                                               // Use true na placa A e false na placa B.
 
+const char COMANDO_LIGAR[] = "LIGAR LED VERDE.";                                                             // Texto de 16 bytes que solicita o acionamento do LED verde.
+const char COMANDO_DESLIGAR[] = "DESLIGAR LED    ";                                                          // Texto de 16 bytes, incluindo quatro espaços após LED.
+
 const int PINO_RX = 16;                                                                                      // RX recebe o TX da outra placa; conecte também os pinos GND.
 const int PINO_TX = 17;                                                                                      // TX transmite para o RX da outra placa.
-const unsigned long INTERVALO_ENVIO_MS = 5000;                                                               // A placa transmissora reenvia a mensagem neste intervalo.
+const int PINO_LED_VERDE = 2;                                                                                // Saída usada para o Led verde;
+const unsigned long INTERVALO_ENVIO_MS = 5000;                                                               // Intervalo entre o envio das matrículas e de cada comando.
 
 uint8_t chave[16];                                                                                           // Guarda a chave de 16 bytes formada com as duas matrículas.
 uint8_t chaves[176];                                                                                         // Guarda as 11 chaves de rodada geradas pelo AES.
@@ -26,6 +30,7 @@ Receptor receptor;                                                              
 
 bool pronto = false;                                                                                         // Indica se a inicialização foi concluída.
 unsigned long ultimoEnvio = 0;                                                                               // Guarda a hora do último envio periódico.
+int proximoEnvio = 0;                                                                                        // 0: matrículas; 1: ligar; 2: desligar; 3: ligar novamente.
 
 void imprimirHex(const char *titulo, const uint8_t *dados, int tamanho)                                      // Mostra uma sequência de bytes em hexadecimal no monitor serial.
 {
@@ -42,7 +47,7 @@ void imprimirHex(const char *titulo, const uint8_t *dados, int tamanho)         
     Serial.println();                                                                                        // Termina a linha depois de imprimir todos os bytes.
 }
 
-bool conferirVetor(const uint8_t chaveTeste[16], const uint8_t claro[16], const uint8_t esperado[16])        // Confere a cifração e a decifração de um vetor oficial do FIPS-197.
+bool conferirVetor(const uint8_t chaveTeste[16], const uint8_t claro[16], const uint8_t esperado[16])        // Confere a criptografia e a descriptografia de um vetor oficial do FIPS-197.
 {
     uint8_t chavesTeste[176], bloco[16];                                                                     // Reserva espaço para as chaves de rodada e para uma cópia do bloco.
 
@@ -56,7 +61,7 @@ bool conferirVetor(const uint8_t chaveTeste[16], const uint8_t claro[16], const 
         return false;                                                                                        // Falha se o resultado criptografado não corresponder ao vetor oficial.
     }
 
-    descriptografarBloco(bloco, chavesTeste);                                                                // Decifra o resultado para conferir também as operações inversas.
+    descriptografarBloco(bloco, chavesTeste);                                                                // Descriptografa o resultado para conferir também as operações inversas.
     return memcmp(bloco, claro, 16) == 0;                                                                    // O resultado deve voltar a ser igual ao texto claro inicial.
 }
 
@@ -91,14 +96,14 @@ bool validarAES()                                                               
         0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5, 0x5a                                                       // Bytes 8 a 15 do resultado esperado.
     };
 
-    bool passouB = conferirVetor(chaveB, claroB, esperadoB);                                                 // Confere cifração e decifração para os dois vetores oficiais.
+    bool passouB = conferirVetor(chaveB, claroB, esperadoB);                                                 // Confere criptografia e descriptografia para os dois vetores oficiais.
     bool passouC = conferirVetor(chaveC, claroC, esperadoC);                                                 // Confere o segundo vetor oficial.
 
     Serial.print("FIPS B: ");                                                                                // Mostra no monitor o resultado de cada conferência.
 
     if (passouB)                                                                                             // Verifica se o vetor oficial foi aprovado.
     {
-        Serial.println("OK");                                                                                // Informa que a cifração e a decifração estão corretas.
+        Serial.println("OK");                                                                                // Informa que a criptografia e a descriptografia estão corretas.
     } else {                                                                                                 // Trata a falha na conferência do vetor.
         Serial.println("FALHOU");                                                                            // Informa que o resultado não corresponde ao vetor oficial.
     }
@@ -107,7 +112,7 @@ bool validarAES()                                                               
 
     if (passouC)                                                                                             // Verifica se o vetor oficial foi aprovado.
     {
-        Serial.println("OK");                                                                                // Informa que a cifração e a decifração estão corretas.
+        Serial.println("OK");                                                                                // Informa que a criptografia e a descriptografia estão corretas.
     } else {                                                                                                 // Trata a falha na conferência do vetor.
         Serial.println("FALHOU");                                                                            // Informa que o resultado não corresponde ao vetor oficial.
     }
@@ -126,7 +131,7 @@ bool prepararMensagem()                                                         
     }
 
     imprimirHex("Chave ASCII em hexadecimal: ", chave, 16);                                                  // Exibe os 16 bytes da chave da dupla.
-    imprimirHex("Mensagem com PKCS#7: ", mensagem, tamanhoCriptografado);                                    // Exibe o texto preparado para cifração.
+    imprimirHex("Mensagem com PKCS#7: ", mensagem, tamanhoCriptografado);                                    // Exibe o texto preparado para criptografia.
 
     imprimirHex("Chave da rodada 0: ", chaves, 16);                                                          // Exibe a chave usada antes da primeira rodada.
     imprimirHex("Chave da rodada 1: ", chaves + 16, 16);                                                     // Exibe a chave usada na primeira rodada.
@@ -147,7 +152,7 @@ bool prepararMensagem()                                                         
     imprimirHex("Bloco 1 - MixColumns: ", estados[3], 16);                                                   // Mostra o estado após MixColumns.
     imprimirHex("Bloco 1 - AddRoundKey da rodada 1: ", estados[4], 16);                                      // Mostra o estado após a chave da rodada 1.
 
-    imprimirHex("Criptografado final: ", criptografado, tamanhoCriptografado);                               // Exibe toda a mensagem cifrada.
+    imprimirHex("Criptografado final: ", criptografado, tamanhoCriptografado);                               // Exibe toda a mensagem criptografada.
 
     uint8_t chaveAlterada[16], chavesAlteradas[176], bloco[16];                                              // Inicia a demonstração de avalanche e reserva os vetores necessários.
     memcpy(chaveAlterada, chave, 16);                                                                        // Mantém intacta a chave usada na mensagem original.
@@ -179,11 +184,12 @@ bool prepararMensagem()                                                         
         '2', '0', '2', '3', '1', '0', '0', '1',                                                              // Oito primeiros caracteres da chave fictícia.
         '2', '0', '2', '3', '1', '0', '0', '2'                                                               // Oito últimos caracteres da chave fictícia.
     };
-    const char comandos[] = "LIGAR LED VERDE.DESLIGAR LED    LIGAR LED VERDE.";                              // Repete o primeiro comando no terceiro bloco.
     uint8_t blocos[48], chavesExemplo[176];                                                                  // Reserva três blocos de dados e as chaves de rodada do exemplo.
 
     expandirChave(chaveExemplo, chavesExemplo);                                                              // Gera as chaves de rodada do exemplo ECB.
-    memcpy(blocos, comandos, 48);                                                                            // Copia os três blocos para o vetor de trabalho.
+    memcpy(blocos, COMANDO_LIGAR, 16);                                                                       // Preenche o primeiro bloco com o comando de ligar.
+    memcpy(blocos + 16, COMANDO_DESLIGAR, 16);                                                               // Preenche o segundo bloco com o comando de desligar.
+    memcpy(blocos + 32, COMANDO_LIGAR, 16);                                                                  // Repete o primeiro comando no terceiro bloco.
 
     for (int inicioBloco = 0; inicioBloco < 48; inicioBloco += 16)                                           // Percorre os três blocos do exemplo ECB.
     {
@@ -204,14 +210,47 @@ bool prepararMensagem()                                                         
 
 void enviarMensagem()                                                                                        // Envia o quadro binário definido no enunciado pela UART2.
 {
+    int tamanhoEnvio = tamanhoCriptografado;                                                                 // Começa com o tamanho da mensagem das matrículas, incluindo PKCS#7.
+
+    if (proximoEnvio == 0)                                                                                   // Seleciona a mensagem original da dupla no início de cada ciclo.
+    {
+        memcpy(criptografado, mensagem, tamanhoCriptografado);                                               // Recupera a mensagem preparada para que ela possa ser criptografada novamente.
+        Serial.println("Enviando as matrículas da dupla.");                                                  // Identifica a mensagem de dados que será transmitida.
+    } else {
+        if (proximoEnvio == 2)                                                                               // O segundo comando do ciclo deve apagar o LED da placa B.
+        {
+            memcpy(criptografado, COMANDO_DESLIGAR, 16);                                                     // Copia exatamente os 16 bytes do comando, sem o terminador da string.
+            Serial.println("Enviando o comando para desligar o LED verde.");                                 // Identifica o comando selecionado.
+        } else {
+            memcpy(criptografado, COMANDO_LIGAR, 16);                                                        // Usa o mesmo comando de ligar no primeiro e no terceiro envios de comando.
+            Serial.println("Enviando o comando para ligar o LED verde.");                                    // Identifica o comando selecionado.
+        }
+
+        tamanhoEnvio = adicionarPadding(criptografado, 16, MAX_DADOS);                                       // Acrescenta um bloco PKCS#7 completo ao comando de 16 bytes.
+    }
+
+    if (tamanhoEnvio < 0)                                                                                    // Confere se o preenchimento do comando coube no vetor.
+    {
+        Serial.println("O comando excede o limite do protocolo.");                                           // Informa a falha sem transmitir um quadro incompleto.
+        return;                                                                                              // Mantém a etapa atual para que o ciclo não avance em caso de erro.
+    }
+
+    for (int inicioBloco = 0; inicioBloco < tamanhoEnvio; inicioBloco += 16)                                 // Percorre os blocos da mensagem selecionada.
+    {
+        criptografarBloco(criptografado + inicioBloco, chaves);                                              // Criptografa cada bloco com a chave da dupla usada também na placa B.
+    }
+
+    imprimirHex("Criptografado do quadro enviado: ", criptografado, tamanhoEnvio);                           // Permite comparar os quadros que transportam comandos repetidos.
+
     Serial2.write(MARCADOR);                                                                                 // Escreve o marcador de início do quadro.
-    Serial2.write((uint8_t)(tamanhoCriptografado / 16));                                                     // Escreve a quantidade de blocos criptografados, em um byte.
-    Serial2.write(criptografado, tamanhoCriptografado);                                                      // Envia os bytes criptografados em formato binário.
+    Serial2.write((uint8_t)(tamanhoEnvio / 16));                                                             // Informa a quantidade de blocos da mensagem selecionada.
+    Serial2.write(criptografado, tamanhoEnvio);                                                              // Envia o quadro em bytes brutos, incluindo o preenchimento criptografado.
 
     Serial.println("Quadro enviado pela UART2.");                                                            // Confirma o envio no monitor serial.
+    proximoEnvio = (proximoEnvio + 1) % 4;                                                                   // Avança na sequência e retorna às matrículas após o terceiro comando.
 }
 
-void receberMensagem()                                                                                       // Lê, decifra e mostra os quadros que chegam pela UART2.
+void receberMensagem()                                                                                       // Lê, descriptografia e mostra os quadros que chegam pela UART2.
 {
     if (verificarTempoLimite(receptor, millis()))                                                            // Descarta e informa um quadro parcial cujo tempo limite expirou.
     {
@@ -239,7 +278,7 @@ void receberMensagem()                                                          
             for (int inicioBloco = 0; inicioBloco < receptor.tamanho;                                        // Percorre os blocos criptografados recebidos pela UART.
                  inicioBloco += 16)                                                                          // Avança um bloco de 16 bytes a cada repetição.
             {
-                descriptografarBloco(receptor.dados + inicioBloco, chaves);                                  // Decifra o bloco atual recebido.
+                descriptografarBloco(receptor.dados + inicioBloco, chaves);                                  // Descriptografa o bloco atual recebido.
             }
 
             int tamanho = removerPadding(receptor.dados, receptor.tamanho);                                  // Confere o padding e obtém o tamanho do texto original.
@@ -251,6 +290,16 @@ void receberMensagem()                                                          
                 Serial.print("Texto original: ");                                                            // write respeita o tamanho e dispensa um '\0' no final do vetor.
                 Serial.write(receptor.dados, tamanho);                                                       // Mostra o texto sem exigir um byte terminador.
                 Serial.println();                                                                            // Pula para a próxima linha do monitor.
+
+                if (tamanho == 16 && memcmp(receptor.dados, COMANDO_LIGAR, 16) == 0)                         // Aceita somente o comando completo de ligar, depois de validar o PKCS#7.
+                {
+                    digitalWrite(PINO_LED_VERDE, HIGH);                                                      // Acende o LED ligado ao pino configurado da placa B.
+                    Serial.println("LED verde ligado.");                                                     // Confirma a execução do comando recebido.
+                } else if (tamanho == 16 && memcmp(receptor.dados, COMANDO_DESLIGAR, 16) == 0)               // Aceita somente o comando completo de desligar, com os quatro espaços finais.
+                {
+                    digitalWrite(PINO_LED_VERDE, LOW);                                                       // Apaga o LED da placa B.
+                    Serial.println("LED verde desligado.");                                                  // Confirma a execução do comando recebido.
+                }
             }
         }                                                                                                    // ECB não autentica os dados recebidos.
     }
@@ -259,6 +308,12 @@ void receberMensagem()                                                          
 void setup()                                                                                                 // Inicializa e configura a placa.
 {
     Serial.begin(115200);                                                                                    // Inicia a porta serial usada pelo monitor do computador.
+
+    if (!TRANSMISSOR)                                                                                        // Apenas a placa receptora controla o LED físico.
+    {
+        pinMode(PINO_LED_VERDE, OUTPUT);                                                                     // Configura o pino escolhido como saída digital.
+        digitalWrite(PINO_LED_VERDE, LOW);                                                                   // Mantém o LED desligado durante a inicialização e as validações.
+    }
 
     Serial2.setRxBufferSize(MAX_DADOS + 2);                                                                  // Reserva espaço para o maior quadro permitido pelo protocolo.
     Serial2.begin(115200, SERIAL_8N1, PINO_RX, PINO_TX);                                                     // Inicia a UART2 nos pinos configurados.
@@ -279,7 +334,7 @@ void setup()                                                                    
         return;                                                                                              // Interrompe a inicialização da placa.
     }
 
-    expandirChave(chave, chaves);                                                                            // Prepara as chaves de rodada usadas na cifração e na decifração.
+    expandirChave(chave, chaves);                                                                            // Prepara as chaves de rodada usadas na criptografia e na descriptografia.
 
     if (TRANSMISSOR)                                                                                         // Escolhe o comportamento definido para esta placa.
     {
@@ -310,7 +365,7 @@ void loop()                                                                     
     {
         if (millis() - ultimoEnvio >= INTERVALO_ENVIO_MS)                                                    // Verifica se chegou a hora de reenviar.
         {
-            enviarMensagem();                                                                                // Reenvia a mensagem preparada.
+            enviarMensagem();                                                                                // Envia a próxima mensagem da sequência de matrículas e comandos.
             ultimoEnvio = millis();                                                                          // Atualiza o instante do último envio.
         }
     } else {                                                                                                 // Na placa receptora, processa os dados disponíveis.
