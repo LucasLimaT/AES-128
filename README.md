@@ -1,14 +1,12 @@
 # AES-128 em dois ESP32 via UART
 
-**Implementação didática de criptografia simétrica, com cifração na placa A e recuperação da mensagem na placa B.**
+**Implementação didática de criptografia simétrica, com criptografação na placa A, recuperação da mensagem e controle de um LED verde na placa B.**
 
-Projeto desenvolvido para a disciplina de **Segurança de Sistemas de Computação**, do IFMT. O algoritmo AES-128 foi implementado em C++ com operações sobre bytes, sem utilizar bibliotecas criptográficas. A comunicação entre as placas utiliza a UART2; o monitor serial do computador apresenta as etapas do processamento.
+Projeto desenvolvido para a disciplina de **Segurança de Sistemas de Computação**, do IFMT. O algoritmo AES-128 foi implementado em Arduino com operações sobre bytes, sem utilizar bibliotecas criptográficas. A comunicação entre as placas utiliza a UART2; o monitor serial do computador apresenta as etapas do processamento.
 
 | Plataforma | Desenvolvimento | Cifra | Comunicação |
 | --- | --- | --- | --- |
 | ESP32 Dev Module | Arduino e PlatformIO | AES-128 em modo ECB | UART2, 115200 bit/s, 8N1 |
-
-> **Estado do projeto:** o núcleo AES e o protocolo foram conferidos no computador. A transmissão entre duas placas ESP32 físicas e a demonstração em bancada **ainda estão pendentes**.
 
 ## Navegação
 
@@ -26,25 +24,54 @@ Projeto desenvolvido para a disciplina de **Segurança de Sistemas de Computaç�
 
 ## Funcionamento
 
-As placas usam a mesma chave de 16 bytes. A placa A prepara e cifra a mensagem; a placa B recebe os bytes criptografados e usa essa chave para recuperar o texto original.
+As placas usam a mesma chave de 16 bytes. A placa A prepara e criptografa as matrículas ou um comando; a placa B recebe os bytes criptografados e usa essa chave para recuperar o texto original, quando B recebe um comando reconhecido ela também acende ou apaga o LED verde.
 
-```mermaid
-flowchart LR
-    A["Placa A: matrículas e mensagem"] --> B["Preenchimento PKCS#7"]
-    B --> C["Cifração AES-128 em ECB"]
-    C --> D["Quadro binário pela UART2"]
-    D --> E["Placa B: recepção e decifração"]
-    E --> F["Verificação do PKCS#7"]
-    F --> G["Texto original no monitor serial"]
+```text
+----------------------------------------
+PLACA A - TRANSMISSOR
+----------------------------------------
+
+  Matrículas ou comando
+          |
+          v
+  Preenchimento PKCS#7
+          |
+          v
+  Criptografia AES-128 em ECB
+          |
+          v
+  Quadro binário: 0xAA + quantidade de blocos + dados criptografados
+          |
+          | UART2
+          v
+
+----------------------------------------
+PLACA B - RECEPTOR
+----------------------------------------
+
+  Recepção do quadro completo
+          |
+          v
+  Descriptografia AES-128 em ECB
+          |
+          v
+  Verificação e remoção do PKCS#7
+          |
+          v
+  Texto original no monitor serial
+          |
+          v
+  Execução do comando de LED, quando reconhecido
 ```
 
 O processamento segue estas etapas:
 
-1. **Validar o AES:** ao iniciar, cada placa confere a cifração e a decifração com dois vetores oficiais do FIPS-197.
+1. **Validar o AES:** ao iniciar, cada placa confere a criptografação e a decriptografação com dois vetores oficiais do FIPS-197.
 2. **Formar a chave:** concatenar os oito últimos dígitos da matrícula A com os oito últimos da matrícula B, usando os códigos ASCII dos caracteres.
 3. **Preparar a mensagem:** montar `A:<matrícula A>;B:<matrícula B>` e acrescentar o preenchimento PKCS#7 para completar blocos de 16 bytes.
-4. **Cifrar e enviar:** a placa A cifra cada bloco separadamente e envia um quadro binário. O primeiro envio ocorre na inicialização; os seguintes ocorrem a cada cinco segundos.
-5. **Receber e descriptografar:** a placa B aguarda o quadro completo, decifra os blocos, verifica o preenchimento e exibe a mensagem recuperada.
+4. **Criptografar e enviar:** a placa A criptografa cada bloco separadamente e envia um quadro binário. Primeiro envia as matrículas; depois, a cada cinco segundos, envia os comandos ligar, desligar e ligar novamente. Em seguida, reinicia o ciclo pelas matrículas.
+5. **Receber e descriptografar:** a placa B aguarda o quadro completo, descriptografa os blocos, verifica o preenchimento e exibe a mensagem recuperada.
+6. **Executar o comando:** se o texto completo corresponder a um dos comandos previstos, B atualiza o LED verde. As matrículas e outras mensagens não mudam o estado do LED.
 
 O transmissor também mostra as chaves das rodadas 0 e 1, cinco estados da primeira rodada, o efeito de alterar um bit da chave e um exemplo de repetição de blocos em ECB.
 
@@ -59,9 +86,9 @@ O AES-128 processa blocos de **16 bytes** e usa uma chave de **16 bytes**, equiv
 | `MixColumns` | Combina os bytes de cada coluna usando a aritmética do AES. |
 | `AddRoundKey` | Combina o estado com a chave da rodada por meio de XOR. |
 | Expansão da chave | Produz as chaves utilizadas nas rodadas. |
-| Operações inversas | Desfazem as transformações durante a decifração. |
+| Operações inversas | Desfazem as transformações durante a decriptografação. |
 
-O estado é uma matriz de quatro linhas e quatro colunas, armazenada em um vetor de 16 bytes por colunas. A cifração começa com `AddRoundKey`; depois executa dez rodadas. A décima rodada não utiliza `MixColumns`.
+O estado é uma matriz de quatro linhas e quatro colunas, armazenada em um vetor de 16 bytes por colunas. A criptografação começa com `AddRoundKey`; depois executa dez rodadas. A décima rodada não utiliza `MixColumns`.
 
 As tabelas S-box e S-box inversa estão no código. A S-box do AES resulta do inverso multiplicativo em GF(2⁸), seguido de uma transformação afim. GF(2⁸) é a aritmética de 256 elementos usada pelo algoritmo; as multiplicações foram implementadas com deslocamentos e XOR, incluindo a operação `xtime`.
 
@@ -72,7 +99,6 @@ O projeto PlatformIO fica dentro da pasta **`aes128-esp32-uart/`**. Os comandos 
 ```text
 AES-128/
 ├── README.md
-├── Trabalho_AES-128_ESP32-52f81aa25331404097dcc1c128bb9b56.pdf
 └── aes128-esp32-uart/
     ├── platformio.ini       # Ambiente de compilação para ESP32 e Arduino.
     ├── include/
@@ -84,13 +110,14 @@ AES-128/
         └── main.cpp         # Inicialização, demonstrações e tarefas das placas.
 ```
 
-Para acompanhar o código, comece pelas constantes e por `setup()` em [`main.cpp`](aes128-esp32-uart/src/main.cpp). Consulte [`protocol.cpp`](aes128-esp32-uart/src/protocol.cpp) para entender a preparação e o transporte dos dados; consulte [`aes128.cpp`](aes128-esp32-uart/src/aes128.cpp) para acompanhar as transformações da cifra.
+Para acompanhar o código, comece pelas constantes e por `setup()` em [`main.cpp`](aes128-esp32-uart/src/main.cpp). Consulte [`protocol.cpp`](aes128-esp32-uart/src/protocol.cpp) para entender a preparação e o transporte dos dados; consulte [`aes128.cpp`](aes128-esp32-uart/src/aes128.cpp) para acompanhar as transformações da criptografa.
 
 ## Materiais e ferramentas
 
 - Duas placas ESP32 compatíveis com a configuração `esp32dev` e com os GPIOs 16 e 17 disponíveis.
 - Dois cabos USB com transmissão de dados.
 - Três jumpers para as conexões TX, RX e GND.
+- Um LED controlável na placa B. Se a placa não tiver esse LED, utilize um LED externo, um resistor de 330 Ω e jumpers para a montagem.
 - Git e PlatformIO Core, ou Visual Studio Code com a extensão PlatformIO IDE.
 
 A configuração atual de [`platformio.ini`](aes128-esp32-uart/platformio.ini) é:
@@ -119,6 +146,33 @@ Alimente cada placa pelo seu próprio cabo USB. Para esta montagem, os três jum
 O firmware atual envia mensagens de A para B. A conexão inversa segue a montagem do enunciado, mas o programa não implementa uma resposta da placa B.
 
 **UART2 e monitor serial têm funções diferentes:** a UART2 transporta os bytes criptografados pelos jumpers. A porta serial acessada pelo USB mostra os registros no computador. Ambas foram configuradas no código para 115200 bit/s; `8N1` significa oito bits de dados, sem paridade e com um bit de parada.
+
+### LED na placa B
+
+O código usa **GPIO 2 como configuração provisória**, considerando placas com LED simples controlável, como o DOIT ESP32 DevKit V1. O ambiente `esp32dev` representa um módulo genérico; placas vendidas como ESP32 Dev board podem ter LEDs diferentes. Confirme o modelo, o pino e a existência de um LED controlável antes de gravar o firmware receptor.
+
+O LED que indica alimentação pode ficar aceso sempre que o USB está conectado e não servir para esse controle. O LED controlável, quando presente, pode ter outra cor, como azul. O texto `LIGAR LED VERDE.` foi mantido para seguir os comandos do trabalho; esse texto não determina a cor física do componente.
+
+Antes de gravar na placa B, confira se o LED controlável está realmente ligado ao GPIO 2 e se é acionado em nível alto. Ajuste `PINO_LED_VERDE` se o pino for diferente. A implementação atual usa `HIGH` para acender e `LOW` para apagar, mantendo o LED desligado durante a inicialização. Se o LED da placa funcionar com polaridade invertida, os níveis dessas escritas precisam ser ajustados.
+
+**Alternativa com LED verde externo:** caso a placa não tenha um LED controlável ou a montagem deva usar um componente verde, configure `PINO_LED_VERDE = 25` e monte, com a placa desligada:
+
+```text
+GPIO 25 da placa B --> resistor de 330 Ω --> ânodo do LED verde
+GND da placa B     <-- cátodo do LED verde
+```
+
+O ânodo é o terminal positivo; em um LED novo, normalmente é a perna mais longa. O cátodo é o terminal negativo, indicado também pelo lado achatado do corpo. O resistor deve ficar em série com o LED. Nessa ligação ao GND, `HIGH` acende e `LOW` apaga.
+
+| Momento após o primeiro envio de A | Mensagem enviada | Resultado esperado em B |
+| --- | --- | --- |
+| Inicialização | Matrículas da dupla | Exibe o texto; o LED permanece desligado. |
+| Após 5 segundos | `LIGAR LED VERDE.` | Acende o LED. |
+| Após 10 segundos | `DESLIGAR LED` e quatro espaços | Apaga o LED. |
+| Após 15 segundos | `LIGAR LED VERDE.` | Acende o LED novamente. |
+| Após 20 segundos | Matrículas da dupla | Reinicia o ciclo de mensagens; o LED mantém seu estado. |
+
+Cada comando possui 16 bytes e recebe mais 16 bytes de preenchimento PKCS#7. Portanto, cada comando também ocupa um quadro de **34 bytes**: dois bytes de cabeçalho e 32 bytes criptografados. Os comandos transmitidos usam a **chave da dupla**.
 
 ## Compilação e gravação
 
@@ -174,7 +228,7 @@ Grave agora na porta da **placa A**:
 pio run -e esp32dev --target upload --upload-port /dev/ttyUSB0
 ```
 
-O comando de gravação compila a configuração atual antes de enviá-la. Alterar o arquivo no computador não modifica o firmware já gravado na outra placa. O valor padrão no repositório é `true`; por isso, é necessário preparar a versão receptora antes de gravar B.
+O comando de gravação compila a configuração atual antes de enviá-la. Alterar o arquivo no computador não modifica o firmware já gravado na outra placa. O valor padrão no repositório é `true`; por isso, é necessário preparar a versão receptora antes de gravar B. Confira também se `PINO_LED_VERDE` corresponde à ligação do LED na placa B.
 
 ### 5. Acompanhar as duas placas
 
@@ -192,7 +246,7 @@ pio device monitor --port /dev/ttyUSB1 --baud 115200
 
 O `platformio.ini` atual não define `monitor_speed`; informe `--baud 115200` nos comandos ou selecione essa velocidade no monitor da IDE.
 
-Com os monitores abertos, reinicie primeiro B e depois A para acompanhar os registros de inicialização. O transmissor repete o envio a cada cinco segundos. As demonstrações completas do AES aparecem apenas na inicialização de A. Feche o monitor de uma porta antes de usá-la para uma nova gravação; no terminal, use `Ctrl+C` para sair.
+Com os monitores abertos, reinicie primeiro B e depois A para acompanhar os registros de inicialização. O transmissor avança pela sequência de matrículas e comandos a cada cinco segundos. As demonstrações completas do AES aparecem apenas na inicialização de A. Feche o monitor de uma porta antes de usá-la para uma nova gravação; no terminal, use `Ctrl+C` para sair.
 
 ## O que aparece no monitor serial
 
@@ -205,9 +259,10 @@ FIPS B: OK
 FIPS C.1: OK
 ```
 
-Na placa A, depois dos registros da cifração e das demonstrações:
+Na placa A, depois dos registros da criptografação e das demonstrações:
 
 ```text
+Enviando as matrículas da dupla.
 Quadro enviado pela UART2.
 ```
 
@@ -219,7 +274,20 @@ Criptografado recebido: 014481ae7fb7e79f3dbce25e7f945b11798f0bc63f1d3455c0b80a16
 Texto original: A:2021278440073;B:2021278440278
 ```
 
-Se um vetor FIPS falhar, a placa interrompe a inicialização. Se o quadro estiver incompleto ou o PKCS#7 for inválido, o receptor informa o problema no monitor serial.
+Nos envios seguintes, B também deve apresentar os registros abaixo, com cinco segundos entre os comandos:
+
+```text
+Texto original: LIGAR LED VERDE.
+LED verde ligado.
+Texto original: DESLIGAR LED
+LED verde desligado.
+Texto original: LIGAR LED VERDE.
+LED verde ligado.
+```
+
+O comando de desligar contém quatro espaços depois de `LED`; eles fazem parte da mensagem. O receptor compara o tamanho e os 16 bytes completos antes de executar qualquer comando.
+
+Se um vetor FIPS falhar, a placa interrompe a inicialização. Se o quadro estiver incompleto ou o PKCS#7 for inválido, o receptor informa o problema no monitor serial e preserva o estado do LED. Um comando desconhecido também preserva esse estado.
 
 ## Protocolo de comunicação
 
@@ -246,7 +314,7 @@ O receptor procura `0xAA`, lê a quantidade e coleta exatamente `16 × n` bytes.
 | Capacidade dos dados criptografados | 4080 bytes |
 | Maior quadro | 4082 bytes, incluindo o cabeçalho |
 | Tempo limite de recepção | 1000 ms, contados a partir do marcador |
-| Intervalo entre envios de A | 5000 ms |
+| Intervalo entre mensagens da sequência de A | 5000 ms |
 
 Um quadro que declara zero blocos é rejeitado. Ao atingir o tempo limite, os dados parciais são descartados e o receptor volta a procurar um marcador. A capacidade de 4080 bytes inclui o PKCS#7; o texto original precisa deixar espaço para esse preenchimento.
 
@@ -291,7 +359,7 @@ Esses são estados intermediários. Depois da primeira rodada, o algoritmo ainda
 
 ### Efeito avalanche
 
-A demonstração mantém a mensagem e inverte somente o bit menos significativo do primeiro byte da chave: `0x37` passa a `0x36`. Depois, expande a chave alterada, cifra novamente os dois blocos e conta os bits diferentes em relação ao resultado original.
+A demonstração mantém a mensagem e inverte somente o bit menos significativo do primeiro byte da chave: `0x37` passa a `0x36`. Depois, expande a chave alterada, criptografa novamente os dois blocos e conta os bits diferentes em relação ao resultado original.
 
 ```text
 Bits diferentes: 142 de 256.
@@ -304,41 +372,42 @@ Esse resultado mostra como uma alteração pequena pode modificar muitos bits da
 
 O exemplo adicional usa a chave fictícia `2023100120231002`, fornecida no enunciado, e três blocos. O primeiro e o terceiro contêm `LIGAR LED VERDE.`; o segundo contém `DESLIGAR LED` seguido de quatro espaços. Cada bloco tem exatamente 16 bytes.
 
-Como os blocos 1 e 3 são iguais, os respectivos resultados criptografados também são iguais. Um observador da UART consegue reconhecer essa repetição mesmo sem conhecer a chave. Os comandos são apenas textos usados na demonstração criptográfica: o firmware não controla LEDs.
+Como os blocos 1 e 3 são iguais, os respectivos resultados criptografados também são iguais. Um observador da UART consegue reconhecer essa repetição mesmo sem conhecer a chave.
+
+Além desse registro com a chave fictícia do PDF, o firmware transmite os comandos separadamente com a chave da dupla. A placa B descriptografa cada quadro e executa o comando no LED configurado da placa B. Os dois envios de `LIGAR LED VERDE.` também geram quadros criptografados iguais entre si; o monitor de A mostra o conteúdo de cada quadro para permitir a comparação.
 
 ## Validação e limitações
 
 ### Verificações disponíveis
 
-O firmware executa `validarAES()` antes de trabalhar com as matrículas. São utilizados os vetores dos Apêndices B e C.1 do FIPS-197 de 2001, conforme o enunciado. Para cada vetor, ele compara o criptografado com o resultado oficial e decifra novamente para conferir o texto original.
+O firmware executa `validarAES()` antes de trabalhar com as matrículas. São utilizados os vetores dos Apêndices B e C.1 do FIPS-197 de 2001, conforme o enunciado. Para cada vetor, ele compara o cifrado com o resultado oficial e descriptografa novamente para conferir o texto original.
 
 | Verificação | Situação |
 | --- | --- |
-| Cifração e decifração dos dois vetores FIPS | Conferidas em execução local do núcleo C++. |
+| Cifração e descifração dos dois vetores FIPS | Conferidas em execução local do núcleo C++(ARDUINO). |
 | Chave, PKCS#7 e criptografado dos dados da dupla | Conferidos em execução local. |
 | Recuperação da mensagem pelo receptor | Conferida em simulação, entregando os bytes ao protocolo. |
 | Rejeição de zero blocos e tempo limite de 1000 ms | Conferidos em execução local. |
 | Contagem do efeito avalanche | Conferida: 142 de 256 bits. |
-| Compilação completa para ESP32 e integração com o Arduino | Pendente de confirmação no ambiente PlatformIO. |
-| Transmissão entre duas placas físicas | **Pendente.** |
-| Demonstração em bancada | **Pendente.** |
+| Sequência temporizada de matrículas e comandos | Conferida em simulação do firmware transmissor. |
+| LED desligado na inicialização e comandos de ligar/desligar | Conferidos em simulação do firmware receptor. |
+| Comandos incompletos, desconhecidos e PKCS#7 inválido | Conferido em simulação: não mudam o estado do LED. |
+| Compilação dos firmwares transmissor e receptor para ESP32 | Conferida com PlatformIO e o framework Arduino. |
+| Transmissão entre duas placas físicas | Conferido em placas fisicas |
+| Acionamento do LED físico na placa B | Conferido em placas fisicas |
+| Demonstração em bancada | Conferido em placas fisicas |
 
-A conferência local utilizou `aes128.cpp` e `protocol.cpp`, compilados com G++ e avisos `-Wall -Wextra -Wpedantic`. Ela não exercitou `main.cpp`, os drivers seriais ou a ligação elétrica. A árvore atual não inclui uma suíte independente na pasta `test/`; os autotestes embarcados estão em `main.cpp`.
+A conferência local utilizou o código real de `main.cpp`, `aes128.cpp` e `protocol.cpp`, compilado com G++ e avisos `-Wall -Wextra -Wpedantic`. Um adaptador temporário simulou a UART, a passagem do tempo e os pinos digitais; os quadros esperados foram gerados de forma independente com OpenSSL. Essa simulação não exercita os drivers reais ou a ligação elétrica. A árvore atual não inclui uma suíte independente na pasta `test/`; os autotestes embarcados estão em `main.cpp`.
 
-Para concluir a validação física:
-
-- [ ] Compilar e gravar os dois papéis nas placas correspondentes.
-- [ ] Registrar `FIPS B: OK` e `FIPS C.1: OK` nos dois monitores.
-- [ ] Confirmar que B recupera exatamente a mensagem com as matrículas completas.
-- [ ] Conferir os registros da primeira rodada e o efeito avalanche em A.
-- [ ] Registrar o comportamento em caso de quadro incompleto.
-- [ ] Realizar a demonstração ao vivo e guardar as evidências observadas.
+As duas versões também foram compiladas com PlatformIO Core 6.2.0, plataforma Espressif 32 7.0.1 e o ambiente `esp32dev`. O relatório de compilação indicou 33.928 bytes de RAM estática para o transmissor e 25.752 bytes para o receptor. Esses números não medem o consumo da pilha ou as alocações realizadas durante a execução.
 
 ### Alcance de segurança
 
 Este é um projeto acadêmico voltado à compreensão do algoritmo e do protocolo. O modo ECB foi escolhido pelo enunciado e deixa visíveis as repetições de blocos. Ele também não autentica a mensagem: não garante que os dados vieram do remetente esperado nem detecta, por si só, a troca ou a repetição de blocos.
 
 As matrículas tornam a chave previsível, e o transmissor imprime a chave no monitor para permitir a explicação do trabalho. Essa forma de gerar e apresentar a chave pertence ao exercício. O protocolo também não inclui CRC, confirmação de recebimento ou proteção contra reenvio de quadros antigos. A validade do PKCS#7 não substitui uma verificação de autenticidade.
+
+O controle do LED é uma demonstração acadêmica: um comando válido capturado pode ser reenviado e executado novamente, porque o protocolo não autentica a origem nem verifica se o quadro é novo.
 
 ## Solução de problemas
 
@@ -350,17 +419,17 @@ As matrículas tornam a chave previsível, e o transmissor imprime a chave no mo
 | Caracteres ilegíveis no monitor | Selecione 115200 bit/s. A UART2 binária não deve ser confundida com a saída de diagnóstico pelo USB. |
 | As duas placas informam que enviaram um quadro | Grave B com `TRANSMISSOR = false` e A com `TRANSMISSOR = true`. |
 | B aguarda indefinidamente | Confira TX com RX, GND comum, alimentação e o firmware gravado em cada placa. |
+| B mostra o comando, mas o LED não muda | Confirme que a placa possui um LED controlável, o GPIO utilizado e os níveis que acendem e apagam esse LED. Para o LED externo, confira também a polaridade, o resistor e o GND. |
 | `Tempo limite: quadro incompleto descartado.` | Confira os jumpers e se o transmissor enviou todos os bytes declarados pelo cabeçalho. |
 | `Preenchimento PKCS#7 inválido` | Confira se as matrículas e sua ordem são iguais nos dois firmwares e se houve perda ou alteração de bytes. |
 | `FIPS B: FALHOU` ou `FIPS C.1: FALHOU` | Confira alterações nas operações AES, nas tabelas e nos vetores oficiais antes de investigar a UART. |
 
 ## Autores e documentos
 
-**Lucas Taveira de Lima** e **Marcus Vinícius Santos de Almeida** - Engenharia da Computação, IFMT.
+**Lucas Taveira de Lima** e **Marcus Viníicius Santos de Almeida** - Engenharia da Computação, IFMT.
 
 - [Repositório no GitHub](https://github.com/LucasLimaT/AES-128).
-- [Enunciado do trabalho](Trabalho_AES-128_ESP32-52f81aa25331404097dcc1c128bb9b56.pdf).
-- [Relatório do projeto no Google Docs](https://docs.google.com/document/d/16lZvYvXRlCaC_R9nPiSUiZ0TJYUw0GyGS3ioUDZJaD4/edit).
+- Enunciado do trabalho: *Trabalho prático: AES-128 em dois ESP32 via UART*, fornecido pelo docente em PDF e não incluído neste repositório.
 
 ### Referências técnicas
 
@@ -368,3 +437,6 @@ As matrículas tornam a chave previsível, e o transmissor imprime a chave no mo
 - [PlatformIO - ESP32 Dev Module](https://docs.platformio.org/en/latest/boards/espressif32/esp32dev.html).
 - [PlatformIO - compilação e gravação com `pio run`](https://docs.platformio.org/en/latest/core/userguide/cmd_run.html).
 - [PlatformIO - monitor serial com `pio device monitor`](https://docs.platformio.org/en/latest/core/userguide/device/cmd_monitor.html).
+- [Espressif - configuração e escrita dos pinos digitais](https://docs.espressif.com/projects/arduino-esp32/en/latest/api/gpio.html).
+- [Arduino-ESP32 - LED do DOIT ESP32 DevKit V1 no GPIO 2](https://github.com/espressif/arduino-esp32/blob/master/variants/doitESP32devkitV1/pins_arduino.h).
+- [Espressif - ESP32-DevKitC V4 e seu indicador de alimentação](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32/esp32-devkitc/user_guide.html).
